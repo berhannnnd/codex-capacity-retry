@@ -65,6 +65,16 @@ async function scanIncidents() {
   return incidents.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
 }
 
+
+async function accountInfo() {
+  const authPath = path.join(CODEX_HOME, 'auth.json');
+  try {
+    const raw = JSON.parse(await readFile(authPath, 'utf8'));
+    const accountId = raw.tokens?.account_id || null;
+    return { authMode: raw.auth_mode || 'unknown', accountId: accountId ? `${accountId.slice(0, 8)}…${accountId.slice(-4)}` : '未读取', lastRefresh: raw.last_refresh || null, usage: { available: false, reason: 'Codex 本地 app-server 未提供剩余用量字段' } };
+  } catch { return { authMode: 'unknown', accountId: '未登录', lastRefresh: null, usage: { available: false, reason: '未找到本机认证信息' } }; }
+}
+
 async function continueThread(threadId, model) {
   const params = { threadId, excludeTurns: true };
   const resumed = await app.request('thread/resume', params);
@@ -78,6 +88,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'content-type' }); return res.end(); }
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (req.method === 'GET' && url.pathname === '/') return json(res, 200, { name: 'Capacity Retry bridge', ok: true, dashboard: 'http://127.0.0.1:5173', endpoints: ['/api/health', '/api/threads', '/api/incidents', '/api/models'] });
+    if (req.method === 'GET' && url.pathname === '/api/account') return json(res, 200, await accountInfo());
+    if (req.method === 'POST' && url.pathname === '/api/account/login') { spawn(CODEX_BIN, ['login', '--device-auth'], { detached: true, stdio: 'ignore', env: process.env }).unref(); return json(res, 202, { ok: true, message: '已启动 Codex 登录流程，请在浏览器完成账号切换' }); }
     if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true, adapter: 'codex-app-server', codexHome: CODEX_HOME });
     if (req.method === 'GET' && url.pathname === '/api/threads') return json(res, 200, await app.request('thread/list', { limit: Number(url.searchParams.get('limit') || 40), archived: false }));
     if (req.method === 'GET' && url.pathname === '/api/incidents') return json(res, 200, { data: await scanIncidents() });
