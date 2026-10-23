@@ -8,7 +8,8 @@
     "build": "vite build",
     "test": "node --test",
     "preview": "vite preview --host 127.0.0.1",
-    "bridge": "node server/codex-bridge.js"
+    "bridge": "node server/codex-bridge.js",
+    "live": "node server/codex-bridge.js & bridge_pid=$!; trap \"kill $bridge_pid\" EXIT INT TERM; npm run dev"
   },
   "devDependencies": {
     "vite": "^6.1.0"

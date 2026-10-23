@@ -77,6 +77,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'GET,POST,OPTIONS', 'access-control-allow-headers': 'content-type' }); return res.end(); }
     const url = new URL(req.url, `http://${req.headers.host}`);
+    if (req.method === 'GET' && url.pathname === '/') return json(res, 200, { name: 'Capacity Retry bridge', ok: true, dashboard: 'http://127.0.0.1:5173', endpoints: ['/api/health', '/api/threads', '/api/incidents', '/api/models'] });
     if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true, adapter: 'codex-app-server', codexHome: CODEX_HOME });
     if (req.method === 'GET' && url.pathname === '/api/threads') return json(res, 200, await app.request('thread/list', { limit: Number(url.searchParams.get('limit') || 40), archived: false }));
     if (req.method === 'GET' && url.pathname === '/api/incidents') return json(res, 200, { data: await scanIncidents() });
