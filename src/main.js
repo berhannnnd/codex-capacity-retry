@@ -23,7 +23,7 @@ function render() {
   const remaining = s.nextAt ? formatRemaining(s.nextAt - Date.now()) : '—';
   const state = s.state === 'waiting' ? '等待恢复' : s.state === 'retrying' ? '正在恢复' : s.state === 'continued' ? '已发送继续指令' : s.state === 'switched' ? '已切换模型' : '监听中';
   const statusText = bridge.connected ? '实时监听已连接' : '演示模式';
-  selected = { ...selected, ...(thread ? { title: thread.name || thread.preview || selected.title, model: thread.model || '—', provider: thread.modelProvider || '—', updated: thread.updatedAt ? new Date(thread.updatedAt * 1000).toLocaleString('zh-CN') : '—' } : {}) };
+  selected = { ...selected, title: selected.threadId ? (selected.title === '等待同步本机线程' ? `线程 ${selected.threadId.slice(0, 12)}…` : selected.title) : selected.title, ...(thread ? { title: thread.name || thread.preview || selected.title, model: thread.model || '—', provider: thread.modelProvider || '—', updated: thread.updatedAt ? new Date(thread.updatedAt * 1000).toLocaleString('zh-CN') : '—' } : {}) };
   app.innerHTML = `<main class="app-shell">
     <header class="topbar"><div class="brand"><div class="brand-mark">⌁</div><div><div class="brand-name">Codex 任务管家</div><div class="brand-sub">本机线程监听与安全恢复</div></div></div><div class="top-actions"><span class="connection ${bridge.connected ? 'connected' : ''}"><i></i>${statusText}</span><button class="text-button" id="refresh">立即同步</button></div></header>
     <section class="welcome"><div><div class="eyebrow">控制台首页</div><h1>你的 Codex 任务，<span>现在怎么样？</span></h1><p>这里集中展示本机 Codex 线程的运行状态、容量错误和可执行的恢复动作。数据来自 app-server 与本地 rollout 记录。</p></div><div class="sync-time">最近同步<br><strong>${lastSync || '尚未同步'}</strong></div></section>
@@ -51,6 +51,7 @@ async function syncBridge() {
     const [incidents, threads] = await Promise.all([fetch('http://127.0.0.1:8787/api/incidents').then((r) => r.json()), fetch('http://127.0.0.1:8787/api/threads?limit=40').then((r) => r.json())]);
     const previous = bridge.connected; bridge = { connected: true, incidents: incidents.data || [], threads: threads.data || [] };
     const incident = latestIncident(); if (incident && (!selected.threadId || !bridge.threads.some((t) => t.id === selected.threadId))) selected.threadId = incident.threadId;
+    if (selected.threadId) { try { const detail = await fetch(`http://127.0.0.1:8787/api/threads/${selected.threadId}/read`).then((r) => r.json()); const realThread = detail.thread || detail; if (realThread?.id) selected = { ...selected, title: realThread.name || realThread.preview || `线程 ${realThread.id.slice(0, 12)}…`, model: realThread.model || selected.model, provider: realThread.modelProvider || selected.provider, updated: realThread.updatedAt ? new Date(realThread.updatedAt * 1000).toLocaleString('zh-CN') : selected.updated }; } catch { selected.title = selected.threadId ? `线程 ${selected.threadId.slice(0, 12)}…` : selected.title; } }
     lastSync = new Date().toLocaleTimeString('zh-CN', { hour12: false });
     if (!previous) log('INFO', `已连接真实 Codex · 发现 ${bridge.incidents.length} 条容量事件`);
     render();
