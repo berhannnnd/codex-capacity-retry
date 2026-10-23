@@ -1,16 +1,21 @@
 import http from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 const PORT = Number(process.env.BRIDGE_PORT || 8787);
 const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 const SESSION_ROOT = path.join(CODEX_HOME, 'sessions');
 const ARCHIVE_ROOT = path.join(CODEX_HOME, 'archived_sessions');
+const APP_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const IS_WIN = process.platform === 'win32';
+const PS_SEND_KEYS = path.join(APP_ROOT, 'windows', 'keepalive', 'send_keys.ps1');
+const CONTINUE_PROMPT = 'Continue the unfinished work from the latest checkpoint. Do not repeat completed actions. First inspect the current state and report what you are resuming.';
 const audit = [];
 const activeActions = new Set();
 const acknowledgedAlerts = new Set();
@@ -47,11 +52,26 @@ async function scanIncidents() {
 async function accountInfo() { try { const raw = JSON.parse(await readFile(path.join(CODEX_HOME, 'auth.json'), 'utf8')); const accountId = raw.tokens?.account_id || null; return { id: 'local', maskedAccountId: accountId ? `${accountId.slice(0, 8)}…${accountId.slice(-4)}` : '未读取', authMode: raw.auth_mode || 'unknown', lastRefreshAt: raw.last_refresh || null, active: true, usageStatus: 'unavailable', usage: { status: 'unavailable', reason: '当前接口未提供剩余用量字段', source: 'Codex app-server', collectedAt: now() } }; } catch { return { id: 'local', maskedAccountId: '未登录', authMode: 'unknown', lastRefreshAt: null, active: false, usageStatus: 'unavailable', usage: { status: 'unavailable', reason: '未找到本机认证信息', source: '本地认证文件', collectedAt: now() } }; } }
 function normalizeThread(t) { const status = typeof t.status === 'string' ? t.status : (t.status?.type === 'active' || t.status?.type === 'running' ? 'running' : t.status?.type === 'completed' ? 'completed' : 'idle'); return { id: t.id || t.threadId, title: t.name || t.title || t.preview || '未命名线程', cwd: t.cwd || t.path || null, model: t.model || t.modelSlug || null, provider: t.modelProvider || t.provider || null, status, latestTurnId: t.latestTurnId || null, updatedAt: t.updatedAt ? (typeof t.updatedAt === 'number' ? new Date(t.updatedAt * 1000).toISOString() : t.updatedAt) : now(), source: 'app-server' }; }
 async function getThreads() { const raw = await app.request('thread/list', { limit: 100, archived: false }); const list = raw?.data || raw?.threads || raw || []; return Array.isArray(list) ? list.map(normalizeThread).filter((t) => t.id) : []; }
-async function continueThread(threadId, model, actionId) { if (actionId && activeActions.has(actionId)) return { duplicate: true, actionId }; if (actionId) activeActions.add(actionId); const threads = await getThreads(); const thread = threads.find((t) => t.id === threadId); if (!thread) throw Object.assign(new Error('线程不存在或已归档'), { code: 'thread_not_found' }); if (thread.status === 'running') throw Object.assign(new Error('线程仍在运行，已阻止重复 writer'), { code: 'writer_conflict' }); const record = auditAction(model ? 'switch-model' : 'continue', { threadId, model: model || thread.model, actionId: actionId || crypto.randomUUID() }); try { const resumed = await app.request('thread/resume', { threadId, excludeTurns: true }); const turn = await app.request('turn/start', { threadId, input: [{ type: 'text', text: 'Continue the unfinished work from the latest checkpoint. Do not repeat completed actions. First inspect the current state and report what you are resuming.' }], ...(model ? { model } : {}) }); record.result = 'completed'; return { resumed, turn, actionId: record.actionId, auditId: record.id }; } catch (error) { record.result = 'failed'; record.errorCode = error.code || 'resume_failed'; throw error; } finally { if (actionId) activeActions.delete(actionId); } }
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function desktopUiContinue(threadId, message) {
+  if (!IS_WIN) throw Object.assign(new Error('desktop UI fallback is Windows-only'), { code: 'unsupported_platform' });
+  return new Promise((resolve, reject) => {
+    execFile('cmd', ['/c', 'start', '', `codex://threads/${threadId}`], (navErr) => {
+      if (navErr) return reject(Object.assign(new Error(`codex:// navigation failed: ${navErr.message}`), { code: 'desktop_navigation_failed' }));
+      sleep(1500).then(() => execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS_SEND_KEYS, '-Text', message, '-Enter'], { timeout: 30000 }, (err, stdout) => {
+        if (err) return reject(Object.assign(new Error(`send_keys failed: ${err.message}`), { code: 'desktop_input_failed' }));
+        if (!String(stdout).includes('typed')) return reject(Object.assign(new Error(`send_keys unexpected output: ${String(stdout).trim()}`), { code: 'desktop_input_failed' }));
+        resolve({ ok: true, mode: 'desktop-ui-injection', threadId });
+      }));
+    });
+  });
+}
+
+async function continueThread(threadId, model, actionId) { if (actionId && activeActions.has(actionId)) return { duplicate: true, actionId }; if (actionId) activeActions.add(actionId); const threads = await getThreads(); const thread = threads.find((t) => t.id === threadId); if (!thread) throw Object.assign(new Error('线程不存在或已归档'), { code: 'thread_not_found' }); if (thread.status === 'running') throw Object.assign(new Error('线程仍在运行，已阻止重复 writer'), { code: 'writer_conflict' }); const record = auditAction(model ? 'switch-model' : 'continue', { threadId, model: model || thread.model, actionId: actionId || crypto.randomUUID() }); try { let resumed; try { resumed = await app.request('thread/resume', { threadId, excludeTurns: true }); } catch (error) { if (IS_WIN && /active writer/i.test(error.message)) { const fallback = await desktopUiContinue(threadId, CONTINUE_PROMPT); record.result = 'completed'; return { ...fallback, reason: error.message, actionId: record.actionId, auditId: record.id }; } throw error; } const turn = await app.request('turn/start', { threadId, input: [{ type: 'text', text: CONTINUE_PROMPT }], ...(model ? { model } : {}) }); record.result = 'completed'; return { mode: 'app-server', resumed, turn, actionId: record.actionId, auditId: record.id }; } catch (error) { record.result = 'failed'; record.errorCode = error.code || 'resume_failed'; throw error; } finally { if (actionId) activeActions.delete(actionId); } }
 
 const server = http.createServer(async (req, res) => { try { if (req.method === 'OPTIONS') return json(res, 204, {}); const url = new URL(req.url, `http://${req.headers.host}`); const pathMatch = url.pathname.match(/^\/api\/threads\/([^/]+)(?:\/([^/]+))?$/); const id = pathMatch && safeId(pathMatch[1]);
   if (req.method === 'GET' && url.pathname === '/') return json(res, 200, { name: 'Codex 任务管家 bridge', ok: true, endpoints: ['/api/health', '/api/threads', '/api/alerts', '/api/account', '/api/models', '/api/audit'] });
-  if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: app.connected, adapter: 'codex-app-server', appServer: app.connected ? 'running' : 'disconnected', codexHome: CODEX_HOME, watcher: 'rollout-scan', syncedAt: now() });
+  if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: app.connected, adapter: 'codex-app-server', appServer: app.connected ? 'running' : 'disconnected', codexHome: CODEX_HOME, watcher: 'rollout-scan', platform: process.platform, windowsUiFallback: IS_WIN, syncedAt: now() });
   if (req.method === 'GET' && url.pathname === '/api/account') return json(res, 200, await accountInfo());
   if (req.method === 'POST' && url.pathname === '/api/account/login') { auditAction('login'); spawn(CODEX_BIN, ['login', '--device-auth'], { detached: true, stdio: 'ignore', env: process.env }).unref(); return json(res, 202, { ok: true, message: '已启动 Codex 登录流程，请在浏览器完成账号切换' }); }
   if (req.method === 'GET' && url.pathname === '/api/threads') return json(res, 200, { data: await getThreads() });

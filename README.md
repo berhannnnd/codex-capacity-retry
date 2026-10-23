@@ -89,6 +89,16 @@ npm run tauri:dev
 
 Tauri 窗口加载 Vite 页面。开发阶段仍需要单独运行 `npm run bridge`；正式包需要将 bridge 与 Node runtime 作为 sidecar 打包，当前未把未签名构建描述成正式发布版本。
 
+## Windows 桌面线程续跑
+
+Windows Codex 桌面版会给已打开的线程持有独占 writer。`windows/keepalive/` 提供真实 rollout 监听和桌面注入兜底：检测到容量错误后通过 `codex://threads/<id>` 导航到原线程，再用 `SendInput` 发送“继续”，并尽量恢复用户原来的前台窗口。桥接的 `POST /api/threads/:id/continue` 遇到 `active writer` 时也会自动走这条路径。
+
+```bat
+windows\keepalive\start_keepalive.cmd
+```
+
+开发调试可以运行 `npm run keepalive -- --dry-run`；只扫描最近 24 小时落盘错误而不常驻运行，可以运行 `node windows/keepalive/keepalive.js --scan`。该路径只读 rollout 文件，自动动作仍受退避次数、用户输入和单实例锁保护。
+
 ## Homebrew 安装
 
 当前 formula 使用 GitHub main 分支，适合内部试用：

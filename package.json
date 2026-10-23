@@ -12,7 +12,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "live": "node server/codex-bridge.js & bridge_pid=$!; trap \"kill $bridge_pid\" EXIT INT TERM; npm run dev"
+    "live": "node server/codex-bridge.js & bridge_pid=$!; trap \"kill $bridge_pid\" EXIT INT TERM; npm run dev",
+    "keepalive": "node windows/keepalive/keepalive.js"
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.12.4",
