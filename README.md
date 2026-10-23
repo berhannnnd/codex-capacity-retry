@@ -90,15 +90,17 @@ codex login
 - 稍后再试
 - 标记为人工处理
 
-## Windows：监控桌面 Codex 并发送“继续”
+## Windows：监控桌面 Codex 并自动恢复
 
-Windows Codex 桌面版会给已打开的线程持有独占 writer。此时第二个 app-server 无法直接写入同一线程，项目提供了桌面注入兜底：
+Windows Codex 桌面版会给已打开的线程持有独占 writer。此时第二个 app-server 无法直接写入同一线程，项目提供了逐级恢复阶梯（每一步都通过观察 rollout 出现 `task_started` 确认生效，未生效才升级）：
 
-1. 监听 rollout JSONL
-2. 发现容量错误后定位 Thread ID
-3. 通过 `codex://threads/<id>` 打开原线程
-4. 使用 SendInput 输入“继续”并回车
-5. 尽量恢复用户原来的前台窗口
+1. 监听 rollout JSONL，发现容量错误后定位 Thread ID
+2. 通过 `codex://threads/<id>` 打开原线程
+3. 线程设有 goal 且被容量错误置为 `blocked` 时，用 `thread/goal/set` 恢复目标（goal API 不受 rollout 写锁限制），等待目标引擎自行接管——零上下文开销
+4. 用 UI Automation 点击报错卡片上的 Retry 按钮（同 turn 重试，不新增消息、不抢焦点）
+5. 兜底：SendInput 输入目标感知的续跑消息并回车，尽量恢复用户原来的前台窗口
+
+goal 只自动恢复 `blocked`；`paused`/用量/预算类状态视为用户决策保持不动。
 
 启动持续监控：
 
