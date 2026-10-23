@@ -9,7 +9,8 @@
     "test": "node --test",
     "preview": "vite preview --host 127.0.0.1",
     "bridge": "node server/codex-bridge.js",
-    "live": "node server/codex-bridge.js & bridge_pid=$!; trap \"kill $bridge_pid\" EXIT INT TERM; npm run dev"
+    "live": "node server/codex-bridge.js & bridge_pid=$!; trap \"kill $bridge_pid\" EXIT INT TERM; npm run dev",
+    "keepalive": "node windows/keepalive/keepalive.js"
   },
   "devDependencies": {
     "vite": "^6.1.0"

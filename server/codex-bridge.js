@@ -1,16 +1,21 @@
 import http from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
 const PORT = Number(process.env.BRIDGE_PORT || 8787);
 const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 const SESSION_ROOT = path.join(CODEX_HOME, 'sessions');
 const ARCHIVE_ROOT = path.join(CODEX_HOME, 'archived_sessions');
+const APP_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const IS_WIN = process.platform === 'win32';
+const PS_SEND_KEYS = path.join(APP_ROOT, 'windows', 'keepalive', 'send_keys.ps1');
+const CONTINUE_PROMPT = 'Continue the unfinished work from the latest checkpoint. Do not repeat completed actions. First inspect the current state and report what you are resuming.';
 
 class AppServerClient {
   constructor() { this.pending = new Map(); this.nextId = 1; this.notifications = []; this.start(); }
@@ -75,12 +80,43 @@ async function accountInfo() {
   } catch { return { authMode: 'unknown', accountId: '未登录', lastRefresh: null, usage: { available: false, reason: '未找到本机认证信息' } }; }
 }
 
+// Windows fallback: the desktop app holds an exclusive writer lock on every
+// conversation it has open, so thread/resume from this bridge's own app-server
+// fails with "already has an active writer". Drive the app instead: navigate
+// via the codex:// URL scheme, then type the message with send_keys.ps1.
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function desktopUiContinue(threadId, message) {
+  if (!IS_WIN) throw new Error('desktop UI fallback is Windows-only');
+  return new Promise((resolve, reject) => {
+    execFile('cmd', ['/c', 'start', '', `codex://threads/${threadId}`], (navErr) => {
+      if (navErr) return reject(new Error(`codex:// navigation failed: ${navErr.message}`));
+      sleep(1500).then(() => {
+        execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', PS_SEND_KEYS, '-Text', message, '-Enter'], { timeout: 30000 }, (err, stdout) => {
+          if (err) return reject(new Error(`send_keys failed: ${err.message}`));
+          if (!String(stdout).includes('typed')) return reject(new Error(`send_keys unexpected output: ${String(stdout).trim()}`));
+          resolve({ ok: true, mode: 'desktop-ui-injection', threadId });
+        });
+      });
+    });
+  });
+}
+
 async function continueThread(threadId, model) {
   const params = { threadId, excludeTurns: true };
-  const resumed = await app.request('thread/resume', params);
-  const input = [{ type: 'text', text: 'Continue the unfinished work from the latest checkpoint. Do not repeat completed actions. First inspect the current state and report what you are resuming.' }];
+  let resumed;
+  try {
+    resumed = await app.request('thread/resume', params);
+  } catch (error) {
+    if (IS_WIN && /active writer/i.test(error.message)) {
+      const fallback = await desktopUiContinue(threadId, CONTINUE_PROMPT);
+      return { mode: 'desktop-ui-injection', reason: error.message, ...fallback };
+    }
+    throw error;
+  }
+  const input = [{ type: 'text', text: CONTINUE_PROMPT }];
   const turn = await app.request('turn/start', { threadId, input, ...(model ? { model } : {}) });
-  return { resumed, turn };
+  return { mode: 'app-server', resumed, turn };
 }
 
 const server = http.createServer(async (req, res) => {
@@ -90,7 +126,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/') return json(res, 200, { name: 'Capacity Retry bridge', ok: true, dashboard: 'http://127.0.0.1:5173', endpoints: ['/api/health', '/api/threads', '/api/incidents', '/api/models'] });
     if (req.method === 'GET' && url.pathname === '/api/account') return json(res, 200, await accountInfo());
     if (req.method === 'POST' && url.pathname === '/api/account/login') { spawn(CODEX_BIN, ['login', '--device-auth'], { detached: true, stdio: 'ignore', env: process.env }).unref(); return json(res, 202, { ok: true, message: '已启动 Codex 登录流程，请在浏览器完成账号切换' }); }
-    if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true, adapter: 'codex-app-server', codexHome: CODEX_HOME });
+    if (req.method === 'GET' && url.pathname === '/api/health') return json(res, 200, { ok: true, adapter: 'codex-app-server', codexHome: CODEX_HOME, platform: process.platform, windowsUiFallback: IS_WIN });
     if (req.method === 'GET' && url.pathname === '/api/threads') return json(res, 200, await app.request('thread/list', { limit: Number(url.searchParams.get('limit') || 40), archived: false }));
     if (req.method === 'GET' && url.pathname === '/api/incidents') return json(res, 200, { data: await scanIncidents() });
     const match = url.pathname.match(/^\/api\/threads\/([^/]+)\/([^/]+)$/); const id = match && safeId(match[1]);

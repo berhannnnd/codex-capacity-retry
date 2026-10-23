@@ -67,7 +67,7 @@ npm run bridge
 - `GET /api/threads`：通过 app-server `thread/list` 读取真实线程
 - `GET /api/incidents`：扫描 `CODEX_HOME/sessions` 和 `archived_sessions` 的 JSONL，识别容量错误、`server_overloaded`、失败 turn
 - `GET /api/threads/:id/read`：读取线程元数据
-- `POST /api/threads/:id/continue`：通过 `thread/resume` + `turn/start` 继续指定线程
+- `POST /api/threads/:id/continue`：通过 `thread/resume` + `turn/start` 继续指定线程；Windows 上线程被桌面 App 持锁时自动降级为桌面 UI 注入（见下）
 - `GET /api/models`：读取 app-server 模型目录
 
 前端仍用 `npm run dev` 启动；如果 8787 可用，页面会显示 `Live app-server` 并把动作发给真实线程，否则保持模拟模式。
@@ -80,6 +80,21 @@ npm run bridge
 npm run live
 ```
 
+
+## Windows 环境
+
+Windows 上 Codex 桌面版对每个打开的会话持有独占写锁，桥接服务自起的第二个
+app-server 实例对这类线程执行 `thread/resume` 会得到
+`thread <id> already has an active writer`。`windows/` 目录提供对应的补充路径：
+
+- **自动续跑守护**：`windows/keepalive/` 监听 rollout 文件，发现容量报错后通过
+  `codex://threads/<id>` 把桌面 App 导航到出错会话，用 SendInput 输入"继续"并还原焦点。
+  双击 `start_keepalive.cmd` 启动，`stop_keepalive.cmd` 停止。
+- **桥接降级**：Windows 上 `POST /api/threads/:id/continue` 遇到 `active writer`
+  错误时自动改走同一条 UI 注入链路（复用 `send_keys.ps1`），控制台的"继续"按钮
+  在桌面会话上同样生效；`GET /api/health` 返回 `windowsUiFallback: true` 表示可用。
+
+详见 `windows/README.md`。
 
 ## Homebrew 安装
 
