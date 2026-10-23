@@ -1,5 +1,10 @@
 #!/bin/sh
 set -eu
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  echo "Codex 任务管家：启动本地监听桥接服务和管理后台"
+  echo "用法：codex-capacity-retry"
+  exit 0
+fi
 APP_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 BRIDGE_PORT="${CAPACITY_RETRY_BRIDGE_PORT:-8787}"
 WEB_PORT="${CAPACITY_RETRY_WEB_PORT:-5173}"

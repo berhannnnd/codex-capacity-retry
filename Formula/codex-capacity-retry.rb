@@ -17,6 +17,6 @@ class CodexCapacityRetry < Formula
   end
 
   test do
-    assert_match "Capacity Retry", shell_output("#{bin}/codex-capacity-retry --help 2>&1", 0)
+    assert_match "Codex", shell_output("#{bin}/codex-capacity-retry --help 2>&1", 0)
   end
 end
