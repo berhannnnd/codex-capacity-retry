@@ -9,9 +9,14 @@
     "test": "node --test",
     "preview": "vite preview --host 127.0.0.1",
     "bridge": "node server/codex-bridge.js",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
     "live": "node server/codex-bridge.js & bridge_pid=$!; trap \"kill $bridge_pid\" EXIT INT TERM; npm run dev"
   },
   "devDependencies": {
+    "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/cli": "^2.12.4",
     "vite": "^6.1.0"
   }
 }

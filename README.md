@@ -1,14 +1,14 @@
-# Capacity Retry Console
+# Codex 任务管家
 
-一个本地运行的小型可视化控制台，用于处理 Codex/Agent 任务遇到 `Selected model is at capacity. Please try a different model` 时的恢复决策。
+一个面向个人开发者的本机 Codex 管理后台：统一查看线程、容量告警、账号状态、模型目录和需要确认的恢复动作。当前实现是真实 app-server + rollout 监听，Tauri 2 原生壳用于 macOS 开发和后续分发。
 
-它展示当前任务、provider/model、重试次数、指数退避倒计时、事件日志，并提供三个动作：重试当前任务、从检查点继续新会话、切换到备用模型。默认使用模拟适配器，动作只更新本地界面和日志，不会伪装成已经控制了真实 Codex 桌面或 API。
+它展示真实线程、provider/model、容量告警、账号与用量可信度、事件日志，并提供需要确认的继续当前工作和换模型动作。模拟重试状态机仍保留在 `src/engine.js` 作为单元测试和退避策略基础。
 
 ## 运行
 
 ```bash
 npm install
-npm run dev
+npm run live
 ```
 
 然后打开终端输出的本地地址（默认 `http://127.0.0.1:5173`）。生产构建：
@@ -70,7 +70,7 @@ npm run bridge
 - `POST /api/threads/:id/continue`：通过 `thread/resume` + `turn/start` 继续指定线程
 - `GET /api/models`：读取 app-server 模型目录
 
-前端仍用 `npm run dev` 启动；如果 8787 可用，页面会显示 `Live app-server` 并把动作发给真实线程，否则保持模拟模式。
+前端通过 `npm run live` 与桥接服务一起启动；页面会显示连接状态，并把线程、告警和恢复动作发给真实 app-server。桥接不可用时，界面明确显示 Disconnected，不伪造实时数据。
 
 监听覆盖范围：正在运行的 app-server 事件、已落盘的桌面 Codex rollout、归档 rollout、线程列表和手动恢复动作。桌面 UI 中尚未落盘的瞬时渲染状态、网络层内部未写入 rollout 的错误，以及没有经过此桥接启动的外部客户端，无法保证被捕获。文件扫描只读，不修改 Codex 数据。
 
@@ -80,6 +80,14 @@ npm run bridge
 npm run live
 ```
 
+
+## Tauri 原生开发
+
+```bash
+npm run tauri:dev
+```
+
+Tauri 窗口加载 Vite 页面。开发阶段仍需要单独运行 `npm run bridge`；正式包需要将 bridge 与 Node runtime 作为 sidecar 打包，当前未把未签名构建描述成正式发布版本。
 
 ## Homebrew 安装
 
