@@ -1,60 +1,66 @@
 import './style.css';
-import { createRetryController, formatRemaining, RETRY_STATES } from './engine.js';
+import { createRetryController, formatRemaining } from './engine.js';
 
 const app = document.querySelector('#app');
 const controller = createRetryController({ maxAttempts: 4, baseDelay: 8, jitter: 0 });
-let task = { threadId: null, id: 'task_7f2a', title: 'Refactor provider capability probes', model: 'gpt-6.1-sol', provider: 'OpenAI', started: '09:42:18', status: 'waiting' };
-let logs = [
-  ['09:42:18', 'ERROR', 'Selected model is at capacity. Please try a different model.'],
-  ['09:42:18', 'INFO', 'Retry policy armed · exponential backoff · max 4 attempts'],
-  ['09:41:52', 'INFO', 'Task resumed from checkpoint · plan digest 8c4e…']
-];
-let tick;
-let bridge = { connected: false, threads: [], incidents: [] };
+let bridge = { connected: false, incidents: [], threads: [] };
+let selected = { threadId: null, title: '等待同步本机线程', model: '—', provider: '—', updated: '—' };
+let logs = [];
+let lastSync = null;
+let timer;
 
 function log(level, message) {
-  logs.unshift([new Date().toLocaleTimeString('en-US', { hour12: false }), level, message]);
+  logs.unshift({ time: new Date().toLocaleTimeString('zh-CN', { hour12: false }), level, message });
+  logs = logs.slice(0, 30);
 }
+function latestIncident() { return bridge.incidents[0]; }
+function selectedThread() { return bridge.threads.find((thread) => thread.id === selected.threadId); }
 
 function render() {
+  const incident = latestIncident();
+  const thread = selectedThread();
   const s = controller.snapshot;
   const remaining = s.nextAt ? formatRemaining(s.nextAt - Date.now()) : '—';
-  const stateLabel = { idle: 'READY', waiting: 'WAITING', retrying: 'RETRYING', continued: 'CONTINUED', switched: 'SWITCHED', exhausted: 'EXHAUSTED' }[s.state];
-  app.innerHTML = `
-    <main class="shell">
-      <header class="topbar">
-        <div class="brand"><span class="brand-mark">↻</span><div><div class="eyebrow">LOCAL CONTROL PLANE</div><h1>Capacity Retry <span>Console</span></h1></div></div>
-        <div class="top-actions"><span class="adapter-pill"><i></i> ${bridge.connected ? 'Live app-server' : 'Simulated adapter'}</span><button class="ghost" id="reset">Reset session</button></div>
-      </header>
-      <section class="hero">
-        <div><p class="kicker">TASK RECOVERY / 01</p><h2>Keep the work moving<br><em>when capacity moves.</em></h2><p class="lede">A small control room for model-capacity failures. Observe the backoff, choose the next action, and keep a clear audit trail.</p></div>
-        <div class="hero-orbit"><div class="orbit-ring"></div><div class="orbit-core"><strong>${String(s.attempt).padStart(2,'0')}</strong><span>attempt</span></div><span class="orbit-label">MODEL CAPACITY</span></div>
-      </section>
-      <section class="metrics"><div><span>ACTIVE TASK</span><strong>${task.id}</strong></div><div><span>PROVIDER</span><strong>${task.provider}</strong></div><div><span>MODEL</span><strong>${task.model}</strong></div><div><span>CHECKPOINT</span><strong>9 min ago</strong></div></section>
-      <section class="workspace">
-        <div class="primary-column">
-          <article class="card incident-card"><div class="card-head"><div><span class="section-index">01</span><h3>Capacity incident</h3></div><span class="status ${s.state}"><i></i>${stateLabel}</span></div><div class="incident-body"><div class="signal"><div class="signal-icon">!</div><div><strong>Selected model is at capacity</strong><p>The provider returned a capacity response. The task is paused safely at its latest checkpoint.</p></div></div><div class="countdown"><div><span>NEXT RETRY IN</span><strong>${remaining}</strong></div><div class="progress"><span style="width:${s.nextAt ? Math.max(4, Math.min(100, 100 - ((s.nextAt - Date.now()) / 8000) * 100)) : 0}%"></span></div><small>Attempt ${s.attempt} of ${s.maxAttempts} · no work is lost</small></div></div></article>
-          <article class="card action-card"><div class="card-head"><div><span class="section-index">02</span><h3>Choose a recovery action</h3></div><span class="hint">Safe by default</span></div><div class="actions"><button class="action primary" id="retry"><span class="action-icon">↻</span><span><b>Retry current task</b><small>Wait for the next slot, then resume from checkpoint.</small></span><kbd>R</kbd></button><button class="action" id="continue"><span class="action-icon">→</span><span><b>Continue in a new session</b><small>Open a clean session with the same task context.</small><kbd>N</kbd></button><button class="action" id="switch"><span class="action-icon">⇄</span><span><b>Switch model</b><small>Pick a configured fallback. Requires an explicit adapter.</small><kbd>M</kbd></button></div></article>
-          <article class="card adapter-card"><div class="card-head"><div><span class="section-index">03</span><h3>Adapter boundary</h3></div><span class="tag">EXPLICIT</span></div><div class="adapter-row"><div class="adapter-state"><span class="adapter-dot"></span><div><strong>Simulation only</strong><small>Actions update this console and its log.</small></div></div><div class="adapter-copy">Real Codex API or desktop control is intentionally not claimed. Implement <code>TaskAdapter</code> to connect a verified runtime.</div></div></article>
-        </div>
-        <aside class="log-panel"><div class="log-head"><div><span class="section-index">LIVE FEED</span><h3>Event log</h3></div><span class="live-dot">LIVE</span></div><div class="log-list">${logs.map(([time, level, message]) => `<div class="log-row"><time>${time}</time><span class="log-level ${level.toLowerCase()}">${level}</span><p>${message}</p></div>`).join('')}</div><button class="clear" id="clear">Clear log <span>⌘K</span></button></aside>
-      </section>
-      <footer><span>CAPACITY RETRY CONSOLE · 0.1.0</span><span>LOCAL STATE ONLY · <a href="https://github.com" target="_blank" rel="noreferrer">adapter docs ↗</a></span></footer>
-    </main>`;
+  const state = s.state === 'waiting' ? '等待恢复' : s.state === 'retrying' ? '正在恢复' : s.state === 'continued' ? '已发送继续指令' : s.state === 'switched' ? '已切换模型' : '监听中';
+  const statusText = bridge.connected ? '实时监听已连接' : '演示模式';
+  selected = { ...selected, ...(thread ? { title: thread.name || thread.preview || selected.title, model: thread.model || '—', provider: thread.modelProvider || '—', updated: thread.updatedAt ? new Date(thread.updatedAt * 1000).toLocaleString('zh-CN') : '—' } : {}) };
+  app.innerHTML = `<main class="app-shell">
+    <header class="topbar"><div class="brand"><div class="brand-mark">⌁</div><div><div class="brand-name">Codex 任务管家</div><div class="brand-sub">本机线程监听与安全恢复</div></div></div><div class="top-actions"><span class="connection ${bridge.connected ? 'connected' : ''}"><i></i>${statusText}</span><button class="text-button" id="refresh">立即同步</button></div></header>
+    <section class="welcome"><div><div class="eyebrow">控制台首页</div><h1>你的 Codex 任务，<span>现在怎么样？</span></h1><p>这里集中展示本机 Codex 线程的运行状态、容量错误和可执行的恢复动作。数据来自 app-server 与本地 rollout 记录。</p></div><div class="sync-time">最近同步<br><strong>${lastSync || '尚未同步'}</strong></div></section>
+    <section class="summary-grid"><article class="summary-card"><div class="summary-label">正在关注的线程 <span class="help" title="当前选中的 Codex thread ID">?</span></div><strong class="summary-value">${selected.threadId ? selected.threadId.slice(0, 12) + '…' : '—'}</strong><small>线程 ID · 用于定位同一段工作</small></article><article class="summary-card"><div class="summary-label">发现的容量错误 <span class="help" title="从 ~/.codex/sessions 和 archived_sessions 读到的失败事件">?</span></div><strong class="summary-value warning">${bridge.incidents.length}</strong><small>已落盘的容量/过载失败事件</small></article><article class="summary-card"><div class="summary-label">当前模型 <span class="help" title="线程记录里的模型字段，不代表一定有可用额度">?</span></div><strong class="summary-value model">${selected.model}</strong><small>${selected.provider} · 以真实线程记录为准</small></article><article class="summary-card"><div class="summary-label">监听方式 <span class="help" title="实时读取 app-server，并轮询本地 rollout JSONL">?</span></div><strong class="summary-value">${bridge.connected ? '真实模式' : '演示模式'}</strong><small>${bridge.connected ? '每 5 秒同步一次' : '启动 npm run bridge 后切换'}</small></article></section>
+    <section class="layout"><div class="main-column">
+      <article class="panel selected-panel"><div class="panel-title"><div><div class="eyebrow">当前选中</div><h2>${selected.title}</h2></div><span class="state-chip ${incident ? 'danger' : 'ok'}"><i></i>${incident ? '需要关注' : state}</span></div><div class="detail-grid"><div><span>线程 ID</span><strong>${selected.threadId || '暂无'}</strong></div><div><span>最近更新时间</span><strong>${selected.updated}</strong></div><div><span>模型 / Provider</span><strong>${selected.model} / ${selected.provider}</strong></div></div>${incident ? `<div class="incident"><div class="incident-icon">!</div><div><strong>检测到模型容量错误</strong><p>${incident.message}</p><small>发生时间：${new Date(incident.timestamp).toLocaleString('zh-CN')} · turn：${incident.turnId || '未知'}</small></div></div>` : `<div class="empty-state"><strong>当前没有新的容量错误</strong><p>监听服务会继续检查新的 rollout 事件。</p></div>`}</article>
+      <article class="panel"><div class="panel-title"><div><div class="eyebrow">怎么处理</div><h2>选择一个恢复动作</h2></div><span class="muted-label">动作会写入真实 Codex 线程</span></div><div class="action-list"><button class="action primary" id="continue"><span class="action-number">1</span><span><b>继续当前工作</b><small>恢复线程并发送“从最新检查点继续”的新 turn。</small></span><span class="arrow">→</span></button><button class="action" id="switch"><span class="action-number">2</span><span><b>换一个模型继续</b><small>使用备用模型发送新 turn，适合持续过载时使用。</small></span><span class="arrow">→</span></button><button class="action" id="retry"><span class="action-number">3</span><span><b>稍后再试</b><small>按退避策略等待后再发起恢复，不会立即重复请求。</small></span><span class="arrow">→</span></button></div><div class="action-note">安全提示：恢复动作可能继续执行未完成的工具步骤。请先确认线程没有在其他窗口里继续运行。</div></article>
+      <article class="panel explain-panel"><div class="panel-title"><div><div class="eyebrow">指标说明</div><h2>这几个数字分别是什么？</h2></div></div><div class="explain-grid"><div><b>容量错误</b><p>Codex 已记录但模型暂时无法接收请求的失败次数。</p></div><div><b>线程 ID</b><p>一段 Codex 对话的唯一编号，用来读取和恢复同一任务。</p></div><div><b>当前模型</b><p>线程最后记录的模型名称，不是实时额度或可用性保证。</p></div><div><b>真实模式</b><p>已连接本机 app-server，并读取真实线程和 rollout 文件。</p></div></div></article>
+    </div><aside class="panel feed"><div class="panel-title"><div><div class="eyebrow">实时动态</div><h2>事件记录</h2></div><button class="text-button" id="clear">清空</button></div><div class="feed-list">${logs.length ? logs.map((item) => `<div class="feed-item"><time>${item.time}</time><span class="level ${item.level.toLowerCase()}">${item.level}</span><p>${item.message}</p></div>`).join('') : '<div class="feed-empty">同步后，线程变化和恢复动作会显示在这里。</div>'}</div></aside></section>
+    <footer><span>Codex 任务管家 · 本地运行</span><span>${bridge.connected ? '数据源：app-server + rollout JSONL' : '数据源：模拟适配器'}</span></footer>
+  </main>`;
   bind();
 }
 
-function bind() {
-  document.querySelector('#retry').onclick = async () => { controller.markRetrying(); log('INFO', `Retry dispatched for ${task.id} · attempt ${controller.snapshot.attempt}`); if (bridge.connected && task.threadId) { await liveContinue(); } else { setTimeout(() => { controller.fail(); log('WARN', 'Provider still at capacity · backoff scheduled'); render(); }, 500); } render(); };
-  document.querySelector('#continue').onclick = () => { controller.markContinued(); task = { ...task, id: 'task_new_91c', status: 'continued' }; log('INFO', 'New session created from checkpoint · adapter simulation'); render(); };
-  document.querySelector('#switch').onclick = async () => { controller.markSwitched(); task = { ...task, model: 'gpt-6-luna', status: 'switched' }; if (bridge.connected && task.threadId) await liveContinue('gpt-6-luna'); log('INFO', bridge.connected ? 'Fallback model turn sent through Codex app-server' : 'Fallback model selected · gpt-6-luna (simulated)'); render(); };
-  document.querySelector('#reset').onclick = () => { controller.reset(); task = { id: 'task_7f2a', title: 'Refactor provider capability probes', model: 'gpt-6.1-sol', provider: 'OpenAI', started: '09:42:18', status: 'waiting' }; logs = []; log('INFO', 'Session reset · waiting for task event'); render(); };
-  document.querySelector('#clear').onclick = () => { logs = []; render(); };
+async function liveContinue(model) {
+  if (!selected.threadId) { log('WARN', '尚未选中可恢复的线程'); render(); return; }
+  const response = await fetch(`http://127.0.0.1:8787/api/threads/${selected.threadId}/continue`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(model ? { model } : {}) });
+  if (!response.ok) { log('ERROR', `恢复请求失败 · HTTP ${response.status}`); return; }
+  log('INFO', model ? `已发送换模型继续请求 · ${model}` : '已发送继续当前工作的请求');
 }
-
-async function liveContinue(model) { const response = await fetch(`http://127.0.0.1:8787/api/threads/${task.threadId}/continue`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(model ? { model } : {}) }); if (!response.ok) { log('ERROR', `app-server action failed · HTTP ${response.status}`); return; } log('INFO', 'app-server accepted continuation turn'); }
-async function syncBridge() { try { const health = await fetch('http://127.0.0.1:8787/api/health'); if (!health.ok) return; const [incidents, threads] = await Promise.all([fetch('http://127.0.0.1:8787/api/incidents').then(r => r.json()), fetch('http://127.0.0.1:8787/api/threads?limit=40').then(r => r.json())]); const wasConnected = bridge.connected; const oldCount = bridge.incidents.length; bridge = { connected: true, incidents: incidents.data || [], threads: threads.data || [] }; const latest = bridge.incidents[0]; const found = latest && bridge.threads.find(t => t.id === latest.threadId); if (latest) task = { ...task, threadId: latest.threadId, id: latest.threadId, model: found?.model || task.model, provider: found?.modelProvider || task.provider, title: found?.name || task.title }; if (!wasConnected || oldCount !== bridge.incidents.length) log('INFO', `Live bridge connected · ${bridge.incidents.length} recorded capacity events`); render(); } catch { /* local simulation remains available */ } }
-tick = setInterval(() => { if (controller.snapshot.nextAt) render(); }, 1000);
-render();
-syncBridge();
-setInterval(syncBridge, 5000);
+async function syncBridge() {
+  try {
+    const health = await fetch('http://127.0.0.1:8787/api/health');
+    if (!health.ok) throw new Error('bridge unavailable');
+    const [incidents, threads] = await Promise.all([fetch('http://127.0.0.1:8787/api/incidents').then((r) => r.json()), fetch('http://127.0.0.1:8787/api/threads?limit=40').then((r) => r.json())]);
+    const previous = bridge.connected; bridge = { connected: true, incidents: incidents.data || [], threads: threads.data || [] };
+    const incident = latestIncident(); if (incident && (!selected.threadId || !bridge.threads.some((t) => t.id === selected.threadId))) selected.threadId = incident.threadId;
+    lastSync = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    if (!previous) log('INFO', `已连接真实 Codex · 发现 ${bridge.incidents.length} 条容量事件`);
+    render();
+  } catch { if (bridge.connected) { bridge.connected = false; log('WARN', '真实桥接暂时不可用，已切回演示模式'); render(); } }
+}
+function bind() {
+  document.querySelector('#refresh').onclick = syncBridge;
+  document.querySelector('#clear').onclick = () => { logs = []; render(); };
+  document.querySelector('#continue').onclick = async () => { controller.markContinued(); if (bridge.connected) await liveContinue(); else log('INFO', '演示：已创建继续任务'); render(); };
+  document.querySelector('#switch').onclick = async () => { controller.markSwitched(); if (bridge.connected) await liveContinue('gpt-6-luna'); else log('INFO', '演示：已切换到 gpt-6-luna'); render(); };
+  document.querySelector('#retry').onclick = () => { controller.markRetrying(); log('INFO', `退避计时开始 · 第 ${controller.snapshot.attempt} 次`); controller.fail(); render(); };
+}
+render(); syncBridge(); timer = setInterval(syncBridge, 5000); window.addEventListener('beforeunload', () => clearInterval(timer));
