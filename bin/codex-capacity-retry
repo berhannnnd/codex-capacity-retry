@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+APP_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+BRIDGE_PORT="${CAPACITY_RETRY_BRIDGE_PORT:-8787}"
+WEB_PORT="${CAPACITY_RETRY_WEB_PORT:-5173}"
+cleanup() { kill "$BRIDGE_PID" "$WEB_PID" 2>/dev/null || true; }
+trap cleanup EXIT INT TERM
+(
+  cd "$APP_ROOT"
+  BRIDGE_PORT="$BRIDGE_PORT" node server/codex-bridge.js
+) &
+BRIDGE_PID=$!
+(
+  cd "$APP_ROOT"
+  node node_modules/vite/bin/vite.js --host 127.0.0.1 --port "$WEB_PORT"
+) &
+WEB_PID=$!
+printf 'Codex 任务管家启动中： http://127.0.0.1:%s\n' "$WEB_PORT"
+sleep 1
+if command -v open >/dev/null 2>&1; then open "http://127.0.0.1:$WEB_PORT"; fi
+wait "$WEB_PID"
