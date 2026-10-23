@@ -53,3 +53,23 @@ python3 /Users/berhand/.codex/skills/webapp-testing/scripts/with_server.py \
 ## 当前限制
 
 本版本没有调用 Codex API、没有操作桌面窗口、没有自动创建或接管真实会话。它是可运行的本地控制台和接入骨架，便于先把重试策略和用户决策可视化。
+
+## 真实监听模式
+
+本机已有 Codex CLI 时，可以启动真实桥接服务：
+
+```bash
+npm run bridge
+```
+
+桥接服务默认监听 `127.0.0.1:8787`，使用当前用户的 `codex app-server` 和登录态，不读取或打印 OAuth token。它提供：
+
+- `GET /api/threads`：通过 app-server `thread/list` 读取真实线程
+- `GET /api/incidents`：扫描 `CODEX_HOME/sessions` 和 `archived_sessions` 的 JSONL，识别容量错误、`server_overloaded`、失败 turn
+- `GET /api/threads/:id/read`：读取线程元数据
+- `POST /api/threads/:id/continue`：通过 `thread/resume` + `turn/start` 继续指定线程
+- `GET /api/models`：读取 app-server 模型目录
+
+前端仍用 `npm run dev` 启动；如果 8787 可用，页面会显示 `Live app-server` 并把动作发给真实线程，否则保持模拟模式。
+
+监听覆盖范围：正在运行的 app-server 事件、已落盘的桌面 Codex rollout、归档 rollout、线程列表和手动恢复动作。桌面 UI 中尚未落盘的瞬时渲染状态、网络层内部未写入 rollout 的错误，以及没有经过此桥接启动的外部客户端，无法保证被捕获。文件扫描只读，不修改 Codex 数据。
