@@ -49,7 +49,7 @@ async function scanIncidents() {
     let s; try { s = await stat(file); } catch { continue; }
     const cached = scanCache.get(file); if (cached && cached.mtimeMs === s.mtimeMs) { incidents.push(...cached.items); continue; }
     let text; try { const full = await readFile(file, 'utf8'); text = full.slice(-512 * 1024); } catch { continue; }
-    const items = []; let sessionId = path.basename(file).match(/-(01[a-z0-9-]{35})\.jsonl$/)?.[1] || path.basename(file);
+    const items = []; let sessionId = path.basename(file).match(/-(01[a-z0-9-]{34})\.jsonl$/)?.[1] || path.basename(file);
     for (const line of text.split('\n')) {
       try {
         const row = JSON.parse(line); if (row.type === 'session_meta' && row.payload?.id) sessionId = row.payload.id;
