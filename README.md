@@ -79,3 +79,15 @@ npm run bridge
 ```bash
 npm run live
 ```
+
+
+## Homebrew 安装
+
+当前 formula 使用 GitHub main 分支，适合内部试用：
+
+```bash
+brew install --HEAD https://raw.githubusercontent.com/berhannnnd/codex-capacity-retry/main/Formula/codex-capacity-retry.rb
+codex-capacity-retry
+```
+
+它会启动本地桥接服务和管理后台，并在 macOS 上自动打开浏览器。
